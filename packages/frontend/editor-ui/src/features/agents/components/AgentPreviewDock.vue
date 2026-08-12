@@ -13,6 +13,7 @@ import { computed, useTemplateRef } from 'vue';
 import { useEventListener, useStorage } from '@vueuse/core';
 
 import KeyboardShortcutTooltip from '@/app/components/KeyboardShortcutTooltip.vue';
+import { useKeybindings } from '@/app/composables/useKeybindings';
 
 import type {
 	AgentContinueLoadedEvent,
@@ -20,6 +21,7 @@ import type {
 	AgentJsonConfig,
 	AgentResource,
 } from '../types';
+import AgentPersonalisationIcon from './AgentPersonalisationIcon.vue';
 import AgentPreviewChatPage from './AgentPreviewChatPage.vue';
 
 interface SessionOption {
@@ -144,8 +146,14 @@ useKeybindings({
 							:aria-label="i18n.baseText('agentSessions.sessionName')"
 							data-testid="agent-preview-session-title"
 						>
+							<AgentPersonalisationIcon
+								:personalisation="
+									props.localConfig?.personalisation ?? props.agent?.schema?.personalisation
+								"
+								:size="20"
+							/>
 							<span :class="$style.sessionTitleLabel">{{ props.sessionTitle }}</span>
-							<N8nIcon icon="chevron-down" :size="12" />
+							<N8nIcon icon="chevron-down" color="text-light" :size="12" />
 						</N8nButton>
 					</template>
 					<template #item-label="{ item }">
@@ -274,9 +282,9 @@ useKeybindings({
 }
 .floating {
 	width: 100%;
-	max-height: 45rem;
-	aspect-ratio: 1/2;
-	border-radius: var(--radius--xl);
+	height: 36rem;
+	/** Using chat--border-radius as --radius- tokens need fixing by removing legacy variants. DS-557 **/
+	border-radius: calc(var(--chat--border-radius) * 4);
 	border: var(--border);
 	align-self: flex-end;
 	box-shadow: var(--shadow--md);
@@ -293,6 +301,8 @@ useKeybindings({
 .sessionTitle {
 	min-width: 0;
 	flex: 1 1 auto;
+	margin-left: calc(var(--spacing--3xs) * -1);
+	padding-inline: var(--spacing--2xs);
 }
 
 .sessionTitleLabel,
