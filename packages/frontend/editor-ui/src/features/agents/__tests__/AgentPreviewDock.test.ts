@@ -93,7 +93,7 @@ function mountDock(
 describe('AgentPreviewDock', () => {
 	beforeEach(() => {
 		useKeybindingsMock.mockClear();
-		localStorage.removeItem('N8N_AGENT_PREVIEW_FLOATING');
+		localStorage.removeItem('N8N_AGENT_PREVIEW_LAYOUT');
 	});
 
 	it('renders the session switcher before the compact actions', () => {
@@ -120,7 +120,7 @@ describe('AgentPreviewDock', () => {
 	});
 
 	it('renders accessible header actions and emits their events', async () => {
-		localStorage.setItem('N8N_AGENT_PREVIEW_FLOATING', 'true');
+		localStorage.setItem('N8N_AGENT_PREVIEW_LAYOUT', 'floating');
 		const wrapper = mountDock();
 		const expectedActions = [
 			{
@@ -202,7 +202,7 @@ describe('AgentPreviewDock', () => {
 	});
 
 	it('shows shortcut tooltips for the new-session and close actions', () => {
-		localStorage.setItem('N8N_AGENT_PREVIEW_FLOATING', 'true');
+		localStorage.setItem('N8N_AGENT_PREVIEW_LAYOUT', 'floating');
 		const wrapper = mountDock();
 		const tooltips = wrapper.findAllComponents({
 			name: 'KeyboardShortcutTooltip',
@@ -234,7 +234,7 @@ describe('AgentPreviewDock', () => {
 	});
 
 	it('only enables Escape while focus is within the dock', () => {
-		localStorage.setItem('N8N_AGENT_PREVIEW_FLOATING', 'true');
+		localStorage.setItem('N8N_AGENT_PREVIEW_LAYOUT', 'floating');
 		const host = document.createElement('div');
 		const outsideButton = document.createElement('button');
 		document.body.append(host, outsideButton);

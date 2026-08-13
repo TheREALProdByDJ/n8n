@@ -7,8 +7,7 @@ import {
 	N8nToggle,
 	N8nTooltip,
 } from '@n8n/design-system';
-import type { DropdownMenuItemProps } from '@n8n/design-system';
-import type { PathItem } from '@n8n/design-system';
+import type { DropdownMenuItemProps, IconName, PathItem } from '@n8n/design-system';
 import { useI18n } from '@n8n/i18n';
 
 interface SessionDropdownData {
@@ -23,7 +22,7 @@ const props = withDefaults(
 		sessionOptions: Array<DropdownMenuItemProps<string, SessionDropdownData>>;
 		showMetrics: boolean;
 		triggerSource: string | null;
-		triggerIcon: 'slack' | 'bolt-filled';
+		triggerIcon: IconName;
 		triggerLabel: string;
 		totalTokens: number;
 		totalCost: number;
