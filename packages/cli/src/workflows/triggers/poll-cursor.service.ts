@@ -4,6 +4,11 @@ import { PollerStateRepository, TransactionRunner } from '@n8n/db';
 import { Service } from '@n8n/di';
 import type { PollCursor } from 'n8n-workflow';
 
+import { EventService } from '@/events/event.service';
+import type {
+	PollCursorCommitOperation,
+	PollCursorCommitResult,
+} from '@/events/maps/poll-trigger-metrics.event-map';
 import { ExecutionPersistence } from '@/executions/execution-persistence';
 
 /** Narrows a stored cursor, which the persistence layer types more loosely. */
@@ -16,7 +21,36 @@ export class PollCursorService {
 		private readonly transactionRunner: TransactionRunner,
 		private readonly executionPersistence: ExecutionPersistence,
 		private readonly pollerConfig: PollerConfig,
+		private readonly eventService: EventService,
 	) {}
+
+	/**
+	 * Runs a cursor commit and emits its outcome and latency as a metrics event.
+	 * `commit` reports whether the cursor advanced, so a write the lease fence
+	 * rejected is counted apart from one that failed outright.
+	 */
+	private async measureCommit<T>(
+		operation: PollCursorCommitOperation,
+		commit: () => Promise<{ value: T; advanced: boolean }>,
+	): Promise<T> {
+		const startedAt = Date.now();
+		const emitSettled = (result: PollCursorCommitResult) => {
+			this.eventService.emit('poll-cursor-commit-settled', {
+				operation,
+				result,
+				durationMs: Date.now() - startedAt,
+			});
+		};
+
+		try {
+			const { value, advanced } = await commit();
+			emitSettled(advanced ? 'success' : 'fence_rejected');
+			return value;
+		} catch (error) {
+			emitSettled('failure');
+			throw error;
+		}
+	}
 
 	get enabled(): boolean {
 		return this.pollerConfig.durableCursorsEnabled;
@@ -86,35 +120,37 @@ export class PollCursorService {
 	}): Promise<{ executionId: string } | null> {
 		const { workflowId, nodeId, cursor, payload, fence } = args;
 
-		if (this.enabled) {
-			return await this.transactionRunner.run({}, async (ctx) => {
-				const advanced = await this.pollerStateRepository.advanceCursor(
-					workflowId,
-					nodeId,
-					cursor,
-					ctx,
-					fence,
-				);
-				if (advanced) {
-					const executionId = await this.executionPersistence.create(payload, ctx);
-					return { executionId };
-				}
-				return null;
-			});
-		}
+		return await this.measureCommit('with_execution', async () => {
+			if (this.enabled) {
+				return await this.transactionRunner.run({}, async (ctx) => {
+					const advanced = await this.pollerStateRepository.advanceCursor(
+						workflowId,
+						nodeId,
+						cursor,
+						ctx,
+						fence,
+					);
+					if (advanced) {
+						const executionId = await this.executionPersistence.create(payload, ctx);
+						return { value: { executionId }, advanced };
+					}
+					return { value: null, advanced };
+				});
+			}
 
-		const advanced = await this.pollerStateRepository.advanceCursor(
-			workflowId,
-			nodeId,
-			cursor,
-			{},
-			fence,
-		);
-		if (advanced) {
-			const executionId = await this.executionPersistence.create(payload, {});
-			return { executionId };
-		}
-		return null;
+			const advanced = await this.pollerStateRepository.advanceCursor(
+				workflowId,
+				nodeId,
+				cursor,
+				{},
+				fence,
+			);
+			if (advanced) {
+				const executionId = await this.executionPersistence.create(payload, {});
+				return { value: { executionId }, advanced };
+			}
+			return { value: null, advanced };
+		});
 	}
 
 	/**
@@ -128,6 +164,15 @@ export class PollCursorService {
 		fence?: PollLeaseFence;
 	}): Promise<boolean> {
 		const { workflowId, nodeId, cursor, fence } = args;
-		return await this.pollerStateRepository.advanceCursor(workflowId, nodeId, cursor, {}, fence);
+		return await this.measureCommit('cursor_only', async () => {
+			const advanced = await this.pollerStateRepository.advanceCursor(
+				workflowId,
+				nodeId,
+				cursor,
+				{},
+				fence,
+			);
+			return { value: advanced, advanced };
+		});
 	}
 }
