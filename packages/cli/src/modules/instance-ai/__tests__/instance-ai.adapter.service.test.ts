@@ -2107,19 +2107,11 @@ describe('createWorkflowAdapter', () => {
 			updatedAt: new Date('2026-01-01'),
 			nodes: [
 				{
-					id: 'trigger-id',
-					name: 'Manual Trigger',
-					type: 'n8n-nodes-base.manualTrigger',
-					typeVersion: 1,
-					position: [0, 0],
-					parameters: {},
-				},
-				{
 					id: 'agent-id',
 					name: 'AI Agent',
 					type: '@n8n/n8n-nodes-langchain.agent',
 					typeVersion: 3.1,
-					position: [240, 0],
+					position: [0, 0],
 					parameters: { promptType: 'define', text: 'Summarize the input.' },
 				},
 				{
@@ -2127,7 +2119,7 @@ describe('createWorkflowAdapter', () => {
 					name: 'Google Gemini Chat Model',
 					type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
 					typeVersion: 1.1,
-					position: [240, 200],
+					position: [0, 200],
 					parameters: { modelName: 'models/gemini-3-flash-preview' },
 					credentials: {
 						googlePalmApi: {
@@ -2139,9 +2131,6 @@ describe('createWorkflowAdapter', () => {
 				},
 			],
 			connections: {
-				'Manual Trigger': {
-					main: [[{ node: 'AI Agent', type: 'main', index: 0 }]],
-				},
 				'Google Gemini Chat Model': {
 					ai_languageModel: [[{ node: 'AI Agent', type: 'ai_languageModel', index: 0 }]],
 				},
@@ -2151,7 +2140,7 @@ describe('createWorkflowAdapter', () => {
 
 		const workflow = await adapter.getAsWorkflowJSON('wf-managed');
 
-		expect(workflow.nodes[2].credentials).toEqual({
+		expect(workflow.nodes[1].credentials).toEqual({
 			googlePalmApi: {
 				id: null,
 				name: 'n8n credits',
