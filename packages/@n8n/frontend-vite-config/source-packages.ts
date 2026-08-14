@@ -42,10 +42,10 @@ export const sourcePackages = [
  * above because only the shell resolves them: a module aliasing its siblings would let an
  * accidental cross-module import resolve at test time, which is the boundary the module tsconfig
  * base is there to hold.
- *
- * Empty until the first module lands under `packages/modules/`.
  */
-export const modulePackages: Array<{ name: string; dir: string; entry?: boolean }> = [];
+export const modulePackages: Array<{ name: string; dir: string; entry?: boolean }> = [
+	{ name: '@n8n/frontend-module-instance-registry', dir: 'modules/instance-registry/frontend' },
+];
 
 const escapeForRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
