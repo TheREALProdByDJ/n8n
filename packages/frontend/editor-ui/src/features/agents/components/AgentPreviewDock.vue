@@ -16,7 +16,7 @@ import { useRouter } from 'vue-router';
 import KeyboardShortcutTooltip from '@/app/components/KeyboardShortcutTooltip.vue';
 import { useKeybindings } from '@/app/composables/useKeybindings';
 
-import { AGENT_PREVIEW_VIEW } from '../constants';
+import { AGENT_PREVIEW_VIEW, CONTINUE_SESSION_ID_PARAM } from '../constants';
 import type {
 	AgentContinueLoadedEvent,
 	AgentFixWithAssistantEvent,
@@ -142,6 +142,7 @@ function setLayout(nextLayout: string) {
 		const route = router.resolve({
 			name: AGENT_PREVIEW_VIEW,
 			params: { projectId: props.projectId, agentId: props.agentId },
+			query: { [CONTINUE_SESSION_ID_PARAM]: props.effectiveSessionId },
 		});
 		window.open(route.href, '_blank', 'noopener');
 	} else if (nextLayout === PreviewLayout.Docked || nextLayout === PreviewLayout.Fullpage) {
