@@ -3,8 +3,9 @@
 	"compilerOptions": {
 		"types": ["node"],
 		"module": "ESNext",
-		"moduleResolution": "bundler"
+		"moduleResolution": "bundler",
+		// Consumed from source, so nothing should ever emit `.js` beside these files.
+		"noEmit": true
 	},
-	"include": ["**/*.ts"],
-	"exclude": ["dist"]
+	"include": ["**/*.ts"]
 }

@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import type { Alias } from 'vite';
 
-import { frontendModuleAliases, frontendSourceAliases } from './source-packages.js';
+import { frontendModuleAliases, frontendSourceAliases } from '#source-packages';
 
 /**
  * Packages reached *transitively*: they are not a declared dependency of anyone, so they cannot sit
