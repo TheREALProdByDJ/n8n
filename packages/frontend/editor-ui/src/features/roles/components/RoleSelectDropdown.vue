@@ -1,14 +1,11 @@
 <script lang="ts" setup>
-import {
-	N8nBadge,
-	N8nIcon,
-	N8nInput,
-	N8nSelect2,
-	N8nSelect2Item,
-	N8nText,
-	N8nTooltip,
+import { N8nBadge, N8nIcon, N8nSelect2, N8nText, N8nTooltip } from '@n8n/design-system';
+import type {
+	SelectItem,
+	SelectOptionBase,
+	SelectValue,
+	SelectVariants,
 } from '@n8n/design-system';
-import type { SelectItemProps, SelectValue, SelectVariants } from '@n8n/design-system';
 import type { Role } from '@n8n/permissions';
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -18,10 +15,20 @@ import RoleHoverPopover from './RoleHoverPopover.vue';
 import RoleContactAdminModal from './RoleContactAdminModal.vue';
 import CustomRolesUpgradeModal from './CustomRolesUpgradeModal.vue';
 
-interface RoleSelectItem extends SelectItemProps {
-	role?: Role;
+interface RoleSelectOption extends SelectOptionBase<string> {
+	role: Role;
 	requiresUpgrade?: boolean;
 }
+
+const isRoleSelectOption = (item: SelectOptionBase): item is RoleSelectOption =>
+	'role' in item && item.role !== undefined;
+
+const toRoleSelectOption = (role: Role): RoleSelectOption => ({
+	value: role.slug,
+	label: role.displayName,
+	role,
+	requiresUpgrade: !role.licensed,
+});
 
 const props = withDefaults(
 	defineProps<{
@@ -75,11 +82,9 @@ const telemetry = useTelemetry();
 const dropdownOpen = ref(false);
 const contactAdminModalVisible = ref(false);
 const upgradeModalVisible = ref(false);
-const searchQuery = ref('');
 
 watch(dropdownOpen, (open) => {
 	if (!open) {
-		searchQuery.value = '';
 		// Delay blur to run after Reka UI's internal focus management restores trigger focus
 		setTimeout(() => {
 			if (document.activeElement instanceof HTMLElement) {
@@ -106,51 +111,22 @@ const selectedLabel = computed(() => {
 	return undefined;
 });
 
-const filteredSystemRoles = computed(() => {
-	const query = searchQuery.value.toLowerCase().trim();
-	if (!query) return props.systemRoles;
-	return props.systemRoles.filter((role) => role.displayName.toLowerCase().includes(query));
-});
+const roleItems = computed<SelectItem[]>(() => {
+	const items: SelectItem[] = [];
 
-const filteredCustomRoles = computed(() => {
-	const query = searchQuery.value.toLowerCase().trim();
-	if (!query) return props.customRoles;
-	return props.customRoles.filter((role) => role.displayName.toLowerCase().includes(query));
-});
-
-const roleItems = computed<RoleSelectItem[]>(() => {
-	const items: RoleSelectItem[] = [];
-
-	if (filteredSystemRoles.value.length > 0) {
+	if (props.systemRoles.length > 0) {
 		items.push({
-			type: 'label',
+			type: 'group',
 			label: i18n.baseText('projects.settings.role.selector.section.system'),
-		});
-		filteredSystemRoles.value.forEach((role) => {
-			items.push({
-				value: role.slug,
-				label: role.displayName,
-				role,
-				requiresUpgrade: !role.licensed,
-			});
+			items: props.systemRoles.map(toRoleSelectOption),
 		});
 	}
 
-	if (
-		filteredCustomRoles.value.length > 0 ||
-		(!searchQuery.value && !props.hasCustomRolesLicense)
-	) {
+	if (props.customRoles.length > 0 || !props.hasCustomRolesLicense) {
 		items.push({
-			type: 'label',
+			type: 'group',
 			label: i18n.baseText('projects.settings.role.selector.section.custom'),
-		});
-		filteredCustomRoles.value.forEach((role) => {
-			items.push({
-				value: role.slug,
-				label: role.displayName,
-				role,
-				requiresUpgrade: !role.licensed,
-			});
+			items: props.customRoles.map(toRoleSelectOption),
 		});
 	}
 
@@ -191,7 +167,8 @@ const onAddCustomRoleClick = () => {
 	}
 };
 
-const isUnavailableRoleItem = (item: SelectItemProps) => item.requiresUpgrade === true;
+const isUnavailableRoleItem = (item: SelectOptionBase) =>
+	'requiresUpgrade' in item && item.requiresUpgrade === true;
 </script>
 
 <template>
@@ -204,6 +181,8 @@ const isUnavailableRoleItem = (item: SelectItemProps) => item.requiresUpgrade ==
 			:variant="variant"
 			:placeholder="placeholder"
 			position="popper"
+			searchable
+			:search-placeholder="i18n.baseText('generic.search')"
 			:disabled="loading || disabled"
 			:content-class="$style.roleSelectContent"
 			:class="[$style.roleSelect, { [$style.roleSelectGhost]: variant === 'ghost' }]"
@@ -228,55 +207,43 @@ const isUnavailableRoleItem = (item: SelectItemProps) => item.requiresUpgrade ==
 				</N8nTooltip>
 			</template>
 
-			<template #header>
-				<div :class="$style.searchContainer">
-					<N8nInput
-						v-model="searchQuery"
-						:placeholder="i18n.baseText('generic.search')"
-						size="medium"
-						:class="$style.searchInput"
-						@click.stop
-						@keydown.stop
-					/>
-				</div>
+			<template #empty>
+				{{ i18n.baseText('projects.settings.role.selector.noResults') }}
 			</template>
 
-			<template #item="{ item }">
-				<template v-if="(item as RoleSelectItem).role">
-					<RoleHoverPopover
-						:role="(item as RoleSelectItem).role!"
-						:permission-count="
-							permissionCountFn ? permissionCountFn((item as RoleSelectItem).role!) : undefined
-						"
-						:total-permissions="totalPermissions"
-						:edit-route-name="editRouteName"
-						:view-route-name="viewRouteName"
-						:from-view="fromView"
+			<template #item-label="{ item }">
+				<RoleHoverPopover
+					v-if="isRoleSelectOption(item)"
+					:role="item.role"
+					:permission-count="permissionCountFn ? permissionCountFn(item.role) : undefined"
+					:total-permissions="totalPermissions"
+					:edit-route-name="editRouteName"
+					:view-route-name="viewRouteName"
+					:from-view="fromView"
+				>
+					<N8nText
+						tag="span"
+						size="medium"
+						:color="isUnavailableRoleItem(item) ? 'text-light' : 'text-dark'"
+						:class="$style.itemLabel"
 					>
-						<N8nSelect2Item v-bind="item" :class="$style.selectItem">
-							<template #item-label>
-								<N8nText
-									tag="span"
-									size="medium"
-									:color="isUnavailableRoleItem(item) ? 'text-light' : 'text-dark'"
-									:class="$style.itemLabel"
-								>
-									{{ item.label }}
-								</N8nText>
-							</template>
-							<template #item-trailing>
-								<N8nBadge
-									v-if="isUnavailableRoleItem(item)"
-									theme="warning"
-									:class="$style.upgradeBadge"
-								>
-									{{ i18n.baseText('generic.upgrade') }}
-								</N8nBadge>
-							</template>
-						</N8nSelect2Item>
-					</RoleHoverPopover>
+						{{ item.label }}
+					</N8nText>
+				</RoleHoverPopover>
+				<template v-else>
+					{{ item.label }}
 				</template>
-				<N8nSelect2Item v-else v-bind="item" :class="$style.selectItem" />
+			</template>
+
+			<template #item-trailing="{ item, ui }">
+				<N8nBadge
+					v-if="isUnavailableRoleItem(item)"
+					theme="warning"
+					v-bind="ui"
+					:class="$style.upgradeBadge"
+				>
+					{{ i18n.baseText('generic.upgrade') }}
+				</N8nBadge>
 			</template>
 
 			<template #label="{ item }">
@@ -327,18 +294,6 @@ const isUnavailableRoleItem = (item: SelectItemProps) => item.requiresUpgrade ==
 	display: inline-flex;
 	min-width: 0;
 	overflow: hidden;
-}
-
-.searchContainer {
-	border-bottom: var(--border);
-}
-
-.searchInput {
-	width: 100%;
-	--input--radius--bottom-right: 0;
-	--input--radius--bottom-left: 0;
-	--input--border-color: transparent;
-	--input--border-color--hover: transparent;
 }
 
 .roleSelect {
@@ -395,15 +350,7 @@ const isUnavailableRoleItem = (item: SelectItemProps) => item.requiresUpgrade ==
 	max-width: 180px;
 }
 
-.selectItem {
-	display: flex;
-	align-items: center;
-	width: 100%;
-	height: var(--spacing--xl);
-}
-
 .upgradeBadge {
-	margin-left: auto;
 	cursor: pointer;
 }
 
@@ -425,9 +372,9 @@ const isUnavailableRoleItem = (item: SelectItemProps) => item.requiresUpgrade ==
 	align-items: center;
 	gap: var(--spacing--3xs);
 	width: 100%;
-	padding: var(--spacing--xs);
+	min-height: var(--height--xl);
+	padding: 0 var(--spacing--xs);
 	border: none;
-	border-top: var(--border);
 	background: transparent;
 	cursor: pointer;
 	color: var(--color--primary);

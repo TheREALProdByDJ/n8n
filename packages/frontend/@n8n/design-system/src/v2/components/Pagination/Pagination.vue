@@ -20,6 +20,7 @@ import type {
 } from './Pagination.types';
 import Icon from '../../../components/N8nIcon/Icon.vue';
 import N8nSelect from '../Select/Select.vue';
+import type { SelectValue } from '../Select/Select.types';
 
 defineOptions({ inheritAttrs: false });
 
@@ -148,7 +149,11 @@ const handlePageUpdate = (newPage: number) => {
 };
 
 // Handle page size updates
-const handlePageSizeUpdate = (newSize: number | string) => {
+const handlePageSizeUpdate = (newSize: SelectValue | undefined) => {
+	if (newSize === undefined || typeof newSize === 'boolean') {
+		return;
+	}
+
 	const size = typeof newSize === 'string' ? parseInt(newSize, 10) : newSize;
 	internalPageSize.value = size;
 	emit('update:pageSize', size);
@@ -214,7 +219,7 @@ const handleJumperSubmit = () => {
 				v-else-if="part === 'sizes'"
 				:model-value="String(internalPageSize)"
 				:items="pageSizeItems"
-				:size="props.size === 'small' ? 'xsmall' : 'small'"
+				:size="props.size === 'small' ? 'mini' : 'small'"
 				:variant="props.variant === 'ghost' ? 'ghost' : 'default'"
 				:disabled="disabled"
 				:class="$style.pageSizeSelect"
