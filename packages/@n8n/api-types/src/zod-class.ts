@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export interface ZodClass<T = unknown, Shape extends z.ZodRawShape = z.ZodRawShape> {
 	new (data: T): T;
-	schema: z.ZodObject<Shape>;
+	schema: z.ZodObject<Shape, z.UnknownKeysParam>;
 	safeParse(data: unknown): z.SafeParseReturnType<unknown, T>;
 	parse(data: unknown): T;
 	extend<U extends z.ZodRawShape>(shape: U): ZodClass<T & z.infer<z.ZodObject<U>>, Shape & U>;
@@ -36,28 +36,45 @@ export interface ZodArrayClass<T, Item extends z.ZodTypeAny = z.ZodTypeAny> {
  * ```
  */
 export const Z = {
-	class: <T extends z.ZodRawShape>(shape: T): ZodClass<z.objectOutputType<T, z.ZodTypeAny>, T> => {
-		const schema = z.object(shape);
+	class: <T extends z.ZodRawShape>(
+		shape: T,
+		/**
+		 * `strict` rejects an unrecognised key rather than dropping it. Needed by Public API
+		 * request bodies whose hand-written spec set `additionalProperties: false`: Zod strips by
+		 * default, so without this a client's typo would be silently accepted where it used to
+		 * return 400.
+		 *
+		 * `errorMap` lets a DTO word its own rejections. It is applied at parse time rather than
+		 * attached to the object, so it reaches issues raised anywhere in the shape - an object
+		 * error map only ever sees that one object's own issues, not its properties'.
+		 */
+		options: { strict?: boolean; errorMap?: z.ZodErrorMap } = {},
+	): ZodClass<z.objectOutputType<T, z.ZodTypeAny>, T> => {
+		const object = z.object(shape);
+		const schema = options.strict ? object.strict() : object;
+		const params: z.ParseParams | undefined = options.errorMap
+			? ({ errorMap: options.errorMap } as z.ParseParams)
+			: undefined;
 		type Output = z.objectOutputType<T, z.ZodTypeAny>;
 
 		const DtoClass = class {
 			static schema = schema;
 
 			constructor(data: Output) {
-				const parsed = schema.parse(data);
+				const parsed = schema.parse(data, params);
 				Object.assign(this, parsed);
 			}
 
 			static safeParse(data: unknown) {
-				return schema.safeParse(data);
+				return schema.safeParse(data, params);
 			}
 
 			static parse(data: unknown): Output {
-				return schema.parse(data);
+				return schema.parse(data, params);
 			}
 
 			static extend<U extends z.ZodRawShape>(additionalShape: U) {
-				return Z.class({ ...shape, ...additionalShape });
+				return Z.class({ ...shape, ...additionalShape }, options);
 			}
 		};
 
