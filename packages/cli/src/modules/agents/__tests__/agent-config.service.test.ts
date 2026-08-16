@@ -20,6 +20,7 @@ import type { Agent } from '../entities/agent.entity';
 import type { NodeToolAiGatewayService } from '../json-config/node-tool-ai-gateway.service';
 import type { AgentTaskRepository } from '../repositories/agent-task.repository';
 import type { AgentRepository } from '../repositories/agent.repository';
+import type { AgentSecureRuntime } from '../runtime/agent-secure-runtime';
 
 const agentId = 'agent-1';
 const projectId = 'project-1';
@@ -64,6 +65,7 @@ function makeService() {
 	const eventService = mock<EventService>();
 	const agentValidationService = mock<AgentValidationService>();
 	const telemetry = mock<Telemetry>();
+	const secureRuntime = mock<AgentSecureRuntime>();
 
 	agentValidationService.validateLoadedAgentConfiguration.mockResolvedValue({
 		status: 'valid',
@@ -71,10 +73,22 @@ function makeService() {
 	});
 	agentRepository.save.mockImplementation(async (agent) => agent as Agent);
 	agentRepository.claimSetupCompleted.mockResolvedValue(true);
+	// `manager` is a TypeORM getter, not auto-mocked; run transaction callbacks
+	// against a manager that records saves (imported task rows + agent).
+	const txManager = { save: vi.fn(async (entity: unknown) => entity) };
+	Object.defineProperty(agentRepository, 'manager', {
+		value: {
+			transaction: vi.fn(
+				async (cb: (manager: typeof txManager) => Promise<unknown>) => await cb(txManager),
+			),
+		},
+	});
 	credentialsService.findAllCredentialIdsForProject.mockResolvedValue([]);
 	credentialsService.findAllGlobalCredentialIds.mockResolvedValue([]);
 	credentialsService.getCredentialsAUserCanUseInAWorkflow.mockResolvedValue([]);
 	agentTaskRepository.findByAgentId.mockResolvedValue([]);
+	agentTaskRepository.findOwningAgentIds.mockResolvedValue(new Map());
+	agentTaskRepository.create.mockImplementation((data) => data as never);
 	workflowRepository.findManyByAgentToolReferences.mockResolvedValue([]);
 	agentSkillsService.removeUnreferencedSkills.mockImplementation((agent, config) => {
 		const ids = new Set((config.skills ?? []).map((skill) => skill.id));
@@ -95,10 +109,13 @@ function makeService() {
 		eventService,
 		new AgentSetupCompletionService(agentValidationService, telemetry, agentRepository),
 		new AgentModificationTelemetryService(telemetry),
+		secureRuntime,
 	);
 
 	return {
 		service,
+		secureRuntime,
+		txManager,
 		agentRepository,
 		agentTaskRepository,
 		agentSkillsService,
@@ -789,6 +806,296 @@ describe('AgentConfigService', () => {
 
 			expect(agentRepository.claimSetupCompleted).not.toHaveBeenCalled();
 			expect(telemetry.track).not.toHaveBeenCalled();
+		});
+	});
+
+	// Reproduces AGENT-582. A scheduled task's ref lives in the agent schema.
+	// Its definition (name, objective, cronExpression) lives in the separate
+	// `agent_task_definition` table. Exported agent JSON carries the definition
+	// inline on the ref, and import must recreate it. Otherwise the instance
+	// that imports the JSON silently loses the task.
+	describe('scheduled task import', () => {
+		const taskReference = { type: 'task', id: 'weekly_review', enabled: true } as const;
+		const taskDefinition = {
+			id: 'weekly_review',
+			agentId,
+			name: 'Weekly review',
+			objective: 'Summarise the week and post the digest to Slack',
+			cronExpression: '0 9 * * 1',
+		};
+
+		it('preserves a task when an exported config is imported into a fresh agent', async () => {
+			const { service, agentRepository, txManager } = makeService();
+
+			const targetAgentId = 'agent-imported';
+			agentRepository.findByIdAndProjectId.mockResolvedValue(
+				makeAgent({ id: targetAgentId, schema: baseConfig }),
+			);
+
+			// Import an exported config with the task body inlined on the ref into
+			// a fresh agent whose `agent_task_definition` table is empty.
+			const exported = {
+				...baseConfig,
+				tasks: [{ ...taskReference, ...taskDefinition }],
+			};
+			await service.updateConfig(targetAgentId, projectId, exported, user, byUser);
+
+			// The task reference must survive the import instead of being dropped
+			// for lack of a matching definition, and the recreated row must be
+			// written in the same transaction as the agent.
+			expect(agentRepository.manager.transaction).toHaveBeenCalledTimes(1);
+			expect(txManager.save).toHaveBeenCalledWith(
+				expect.objectContaining({ id: 'weekly_review', agentId: targetAgentId }),
+			);
+			const saved = txManager.save.mock.calls.at(-1)?.[0] as Agent;
+			expect(saved.schema?.tasks).toEqual([taskReference]);
+		});
+
+		it('drops a task ref whose inline cron expression is invalid', async () => {
+			const { service, agentRepository, agentTaskRepository } = makeService();
+			agentRepository.findByIdAndProjectId.mockResolvedValue(makeAgent({ schema: baseConfig }));
+
+			await service.updateConfig(
+				agentId,
+				projectId,
+				{
+					...baseConfig,
+					tasks: [{ ...taskReference, ...taskDefinition, cronExpression: 'not a cron' }],
+				},
+				user,
+				byUser,
+			);
+
+			// No row is written and the ref is dropped as an orphan.
+			expect(agentTaskRepository.save).not.toHaveBeenCalled();
+			expect(agentRepository.manager.transaction).not.toHaveBeenCalled();
+			const saved = agentRepository.save.mock.calls.at(-1)?.[0] as Agent;
+			expect(saved.schema?.tasks).toEqual([]);
+		});
+
+		it('assigns a fresh id when the imported task id is already taken by another agent', async () => {
+			const { service, agentRepository, agentTaskRepository, txManager } = makeService();
+			agentRepository.findByIdAndProjectId.mockResolvedValue(makeAgent({ schema: baseConfig }));
+			// The task id is the only primary key of the table. A write under a
+			// taken id changes the other agent's row. Every same-instance import
+			// hits this, because the source agent still owns the exported id.
+			agentTaskRepository.findOwningAgentIds.mockResolvedValue(
+				new Map([['weekly_review', 'agent-other']]),
+			);
+
+			await service.updateConfig(
+				agentId,
+				projectId,
+				{ ...baseConfig, tasks: [{ ...taskReference, ...taskDefinition }] },
+				user,
+				byUser,
+			);
+
+			const savedRow = txManager.save.mock.calls
+				.map(([entity]) => entity as { id?: string; name?: string; agentId?: string })
+				.find((entity) => entity.name === 'Weekly review');
+			expect(savedRow?.agentId).toBe(agentId);
+			expect(savedRow?.id).toMatch(/^task_/);
+			expect(savedRow?.id).not.toBe('weekly_review');
+
+			const saved = txManager.save.mock.calls.at(-1)?.[0] as Agent;
+			expect(saved.schema?.tasks).toEqual([{ type: 'task', id: savedRow?.id, enabled: true }]);
+		});
+
+		it('writes no task rows when the update fails after task recreation', async () => {
+			const { service, agentRepository, txManager } = makeService();
+			agentRepository.findByIdAndProjectId.mockResolvedValue(makeAgent({ schema: baseConfig }));
+			txManager.save.mockRejectedValue(new Error('save failed'));
+
+			await expect(
+				service.updateConfig(
+					agentId,
+					projectId,
+					{ ...baseConfig, tasks: [{ ...taskReference, ...taskDefinition }] },
+					user,
+					byUser,
+				),
+			).rejects.toThrow('save failed');
+
+			// Task rows are written only inside the agent-save transaction, so a
+			// failed update cannot leave orphan definitions behind.
+			expect(agentRepository.manager.transaction).toHaveBeenCalledTimes(1);
+			expect(agentRepository.save).not.toHaveBeenCalled();
+		});
+	});
+
+	// Same as tasks, but for skill bodies, which live in the agent's `skills`
+	// column rather than a separate table.
+	describe('skill import', () => {
+		const skillReference = { type: 'skill', id: 'skill_summarize' } as const;
+		const skillBody = {
+			name: 'Summarize thread',
+			description: 'Summarise long conversation threads',
+			instructions: 'Read the thread and produce a concise summary.',
+		};
+
+		it('preserves a skill when an exported config is imported into a fresh agent', async () => {
+			const { service, agentRepository } = makeService();
+
+			const targetAgentId = 'agent-imported';
+			agentRepository.findByIdAndProjectId.mockResolvedValue(
+				makeAgent({ id: targetAgentId, schema: baseConfig }),
+			);
+
+			const exported = { ...baseConfig, skills: [{ ...skillReference, ...skillBody }] };
+			await service.updateConfig(targetAgentId, projectId, exported, user, byUser);
+
+			const saved = agentRepository.save.mock.calls.at(-1)?.[0] as Agent;
+			expect(saved.schema?.skills).toEqual([skillReference]);
+			expect(saved.skills).toEqual({ [skillReference.id]: skillBody });
+		});
+
+		it('drops a skill ref whose inline body is incomplete', async () => {
+			const { service, agentRepository } = makeService();
+			agentRepository.findByIdAndProjectId.mockResolvedValue(makeAgent({ schema: baseConfig }));
+
+			await service.updateConfig(
+				agentId,
+				projectId,
+				{
+					...baseConfig,
+					skills: [{ type: 'skill', id: skillReference.id, name: skillBody.name }],
+				},
+				user,
+				byUser,
+			);
+
+			const saved = agentRepository.save.mock.calls.at(-1)?.[0] as Agent;
+			expect(saved.schema?.skills).toEqual([]);
+			expect(saved.skills).toEqual({});
+		});
+
+		it('keeps the existing skill body when the imported id already exists on the agent', async () => {
+			const { service, agentRepository } = makeService();
+			const existingBody = {
+				name: 'Existing summarizer',
+				description: 'Already on this agent',
+				instructions: 'Keep me.',
+			};
+			agentRepository.findByIdAndProjectId.mockResolvedValue(
+				makeAgent({
+					schema: { ...baseConfig, skills: [skillReference] } as AgentJsonConfig,
+					skills: { [skillReference.id]: existingBody },
+				}),
+			);
+
+			await service.updateConfig(
+				agentId,
+				projectId,
+				{ ...baseConfig, skills: [{ ...skillReference, ...skillBody }] },
+				user,
+				byUser,
+			);
+
+			const saved = agentRepository.save.mock.calls.at(-1)?.[0] as Agent;
+			expect(saved.schema?.skills).toEqual([skillReference]);
+			expect(saved.skills).toEqual({ [skillReference.id]: existingBody });
+		});
+
+		it('imports a skill whose id collides with an Object.prototype key', async () => {
+			const { service, agentRepository } = makeService();
+			agentRepository.findByIdAndProjectId.mockResolvedValue(makeAgent({ schema: baseConfig }));
+
+			// `skills['constructor']` is truthy on a plain object even when no such
+			// skill exists, so the lookups must use own-property checks.
+			await service.updateConfig(
+				agentId,
+				projectId,
+				{ ...baseConfig, skills: [{ type: 'skill', id: 'constructor', ...skillBody }] },
+				user,
+				byUser,
+			);
+
+			const saved = agentRepository.save.mock.calls.at(-1)?.[0] as Agent;
+			expect(saved.schema?.skills).toEqual([{ type: 'skill', id: 'constructor' }]);
+			expect(saved.skills).toEqual({ constructor: skillBody });
+		});
+
+		it('skips an imported skill whose name collides with an existing skill', async () => {
+			const { service, agentRepository, agentSkillsService } = makeService();
+			agentSkillsService.isSkillNameTaken.mockReturnValue(true);
+			agentRepository.findByIdAndProjectId.mockResolvedValue(makeAgent({ schema: baseConfig }));
+
+			await service.updateConfig(
+				agentId,
+				projectId,
+				{ ...baseConfig, skills: [{ ...skillReference, ...skillBody }] },
+				user,
+				byUser,
+			);
+
+			const saved = agentRepository.save.mock.calls.at(-1)?.[0] as Agent;
+			expect(saved.schema?.skills).toEqual([]);
+			expect(saved.skills).toEqual({});
+		});
+	});
+
+	// Same for custom tools: only the source code travels in the exported
+	// JSON, and the descriptor is re-derived from that code in the secure
+	// runtime on import — never taken from the imported JSON.
+	describe('custom tool import', () => {
+		const toolReference = { type: 'custom', id: 'my_tool' } as const;
+		const toolCode = 'export default new Tool("my_tool")';
+		const toolDescriptor = { name: 'my_tool', description: 'demo' } as never;
+		const storedTool = { code: toolCode, descriptor: toolDescriptor };
+
+		it('preserves a custom tool when an exported config is imported into a fresh agent', async () => {
+			const { service, agentRepository, secureRuntime } = makeService();
+			secureRuntime.describeToolSecurely.mockResolvedValue(toolDescriptor);
+
+			const targetAgentId = 'agent-imported';
+			agentRepository.findByIdAndProjectId.mockResolvedValue(
+				makeAgent({ id: targetAgentId, schema: baseConfig }),
+			);
+
+			const exported = { ...baseConfig, tools: [{ ...toolReference, code: toolCode }] };
+			await service.updateConfig(targetAgentId, projectId, exported, user, byUser);
+
+			expect(secureRuntime.describeToolSecurely).toHaveBeenCalledWith(toolCode);
+			const saved = agentRepository.save.mock.calls.at(-1)?.[0] as Agent;
+			expect(saved.schema?.tools).toEqual([toolReference]);
+			expect(saved.tools).toEqual({ [toolReference.id]: storedTool });
+		});
+
+		it('drops a custom tool ref whose inline code fails to compile', async () => {
+			const { service, agentRepository, secureRuntime } = makeService();
+			secureRuntime.describeToolSecurely.mockRejectedValue(new Error('compile error'));
+			agentRepository.findByIdAndProjectId.mockResolvedValue(makeAgent({ schema: baseConfig }));
+
+			await service.updateConfig(
+				agentId,
+				projectId,
+				{ ...baseConfig, tools: [{ ...toolReference, code: 'not a tool' }] },
+				user,
+				byUser,
+			);
+
+			const saved = agentRepository.save.mock.calls.at(-1)?.[0] as Agent;
+			expect(saved.schema?.tools).toEqual([]);
+			expect(saved.tools).toEqual({});
+		});
+
+		it('drops a custom tool ref whose code declares a different tool name', async () => {
+			const { service, agentRepository, secureRuntime } = makeService();
+			secureRuntime.describeToolSecurely.mockResolvedValue({ name: 'other_tool' } as never);
+			agentRepository.findByIdAndProjectId.mockResolvedValue(makeAgent({ schema: baseConfig }));
+
+			await service.updateConfig(
+				agentId,
+				projectId,
+				{ ...baseConfig, tools: [{ ...toolReference, code: toolCode }] },
+				user,
+				byUser,
+			);
+
+			const saved = agentRepository.save.mock.calls.at(-1)?.[0] as Agent;
+			expect(saved.schema?.tools).toEqual([]);
+			expect(saved.tools).toEqual({});
 		});
 	});
 
