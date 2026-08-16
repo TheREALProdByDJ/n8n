@@ -8,7 +8,7 @@ import {
 	N8nTabs,
 	N8nText,
 } from '@n8n/design-system';
-import type { TabOptions } from '@n8n/design-system';
+import type { DialogSize, TabOptions } from '@n8n/design-system';
 import { type BaseTextKey, useI18n } from '@n8n/i18n';
 import { useDebounceFn } from '@vueuse/core';
 import { getDebounceTime } from '@n8n/composables/useDebounce';
@@ -34,11 +34,14 @@ const props = withDefaults(
 		detailItem?: ToolConnectionItem | null;
 		detailMode?: 'detail' | 'settings';
 		hideBackButton?: boolean;
+		/** Dialog width. Consumers with more tabs (e.g. the n8n Connect section) can widen it. */
+		size?: DialogSize;
 	}>(),
 	{
 		open: false,
 		detailItem: null,
 		detailMode: 'detail',
+		size: 'xlarge',
 	},
 );
 
@@ -192,6 +195,7 @@ const CATEGORY_I18N: Record<ToolCategoryKey, BaseTextKey> = {
 	mcp: 'tools.connection.categories.mcp',
 	ai: 'tools.connection.categories.ai',
 	n8n: 'tools.connection.categories.n8n',
+	'n8n-connect': 'tools.connection.categories.n8nConnect',
 	'app-action': 'tools.connection.categories.appAction',
 	community: 'tools.connection.categories.community',
 	workflows: 'tools.connection.categories.workflows',
@@ -253,7 +257,7 @@ function handleOpenChange(value: boolean) {
 <template>
 	<N8nDialog
 		:open="open"
-		size="xlarge"
+		:size="size"
 		:header="detailItem ? '' : i18n.baseText('tools.connection.title')"
 		:show-close-button="!detailItem"
 		:aria-label="i18n.baseText('tools.connection.title')"
