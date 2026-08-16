@@ -450,23 +450,27 @@ watch(preview.activeTabId, (activeTabId, previousActiveTabId) => {
 	}
 });
 
-const previewMaxWidth = computed(() => Math.round(threadAreaWidth.value / 2));
-// Keep the artifact at its current width and split the remaining space evenly
-// between the Instance AI chat and the agent preview chat.
-const agentPreviewChatColumnWidth = computed(() =>
-	Math.max(0, (threadAreaWidth.value - previewPanelWidth.value) / 2),
-);
+const previewMaxWidth = computed(() => Math.round(threadAreaWidth.value * 0.7));
+const AGENT_PREVIEW_CHAT_MIN_WIDTH = 320;
+const AGENT_PREVIEW_CHAT_PREFERRED_WIDTH = 480;
+const AGENT_PREVIEW_CHAT_MAX_RATIO = 0.5;
+
+/** Keep the agent chat readable without using more than half of its preview panel. */
+const agentPreviewChatColumnWidth = computed(() => {
+	const containerWidth = isPreviewExpanded.value ? threadAreaWidth.value : previewPanelWidth.value;
+	const maximumWidth = containerWidth * AGENT_PREVIEW_CHAT_MAX_RATIO;
+	const minimumWidth = Math.min(AGENT_PREVIEW_CHAT_MIN_WIDTH, maximumWidth);
+
+	return Math.round(
+		Math.max(minimumWidth, Math.min(AGENT_PREVIEW_CHAT_PREFERRED_WIDTH, maximumWidth)),
+	);
+});
+
+/** Add custom width to Agent Preview chat when canvas area is full expanded. */
 const agentPreviewPanelStyle = computed(() => {
 	const chatColumnWidth = {
 		'--agent-preview-chat-column-width': `${agentPreviewChatColumnWidth.value}px`,
 	};
-
-	if (isAgentPreviewDockOpen.value) {
-		return {
-			...chatColumnWidth,
-			width: `${previewPanelWidth.value + agentPreviewChatColumnWidth.value}px`,
-		};
-	}
 
 	return isPreviewExpanded.value
 		? chatColumnWidth
@@ -474,20 +478,14 @@ const agentPreviewPanelStyle = computed(() => {
 });
 
 function togglePreviewExpanded() {
-	if (isAgentPreviewDockOpen.value) return;
-
 	isPreviewExpanded.value = !isPreviewExpanded.value;
 }
 
 function handleAgentPreviewDockOpenChange(open: boolean) {
 	isAgentPreviewDockOpen.value = open;
-	if (open) {
-		isPreviewExpanded.value = false;
-	}
 }
 
-// Clamp preview width when the available area shrinks (sidebar open, window
-// resize, etc.)
+/** Clamp preview width when a sidebar or window resize reduces the available area. */
 watch(previewMaxWidth, (max) => {
 	if (previewPanelWidth.value > max) {
 		previewPanelWidth.value = max;
@@ -1329,7 +1327,7 @@ async function dismissComposerContextChip() {
 					:min-width="400"
 					:max-width="previewMaxWidth"
 					:supported-directions="['left']"
-					:is-resizing-enabled="!isPreviewExpanded && !isAgentPreviewDockOpen"
+					:is-resizing-enabled="!isPreviewExpanded"
 					:grid-size="8"
 					:outset="true"
 					@resize="handlePreviewResize"
@@ -1345,7 +1343,6 @@ async function dismissComposerContextChip() {
 							:tabs="preview.allArtifactTabs.value"
 							:active-tab-id="preview.activeTabId.value"
 							:is-expanded="isPreviewExpanded"
-							:is-expand-disabled="isAgentPreviewDockOpen"
 							:preview-toggle-label="artifactsPreviewToggleLabel"
 							@toggle-preview="toggleArtifactsPreview"
 							@toggle-expanded="togglePreviewExpanded"
